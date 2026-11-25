@@ -158,6 +158,7 @@
   <ItemGroup>
     <ClInclude Include="console.h" />
     <ClInclude Include="constants.h" />
+    <ClInclude Include="ephemeris.h" />
     <ClInclude Include="logger.h" />
     <ClInclude Include="math.h" />
     <ClInclude Include="protoDisk.h" />

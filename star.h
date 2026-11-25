@@ -28,17 +28,18 @@ public:
   star(std::mt19937*, bool earthlike = false);
   ~star();
 
-  double_t mass() { return m_mass;  }
-  double_t radius() { return m_radius;  }
-  double_t temp() { return m_temp; }
-  std::string HRType() { return m_HRType; }
-  std::pair<double_t, double_t> ISL() { return std::pair<double_t, double_t>(m_ISLRock, m_ISLGas); }
-  std::pair<double_t, double_t> HZ() { return std::pair<double_t, double_t>(m_minHZ, m_maxHZ); }
-  double_t frostline() { return m_snowLine; }
-  std::pair<double_t, double_t> OSL() { return std::pair<double_t, double_t>(m_outerHillLimit, m_curvatureCutoff); }
-  double_t density() { return m_density; }
-  sf::Color color() { return m_color; }
-  bool isEarthLike() { return m_bEarthLike; }
+  double_t mass() const { return m_mass;  }
+  double_t radius() const { return m_radius;  }
+  double_t temp() const { return m_temp; }
+  double_t luminosity() const { return m_luminosity;}
+  std::string HRType() const { return m_HRType; }
+  std::pair<double_t, double_t> ISL() const { return std::pair<double_t, double_t>(m_ISLRock, m_ISLGas); }
+  std::pair<double_t, double_t> HZ() const { return std::pair<double_t, double_t>(m_minHZ, m_maxHZ); }
+  double_t frostline() const { return m_snowLine; }
+  std::pair<double_t, double_t> OSL() const { return std::pair<double_t, double_t>(m_outerHillLimit, m_curvatureCutoff); }
+  double_t density() const { return m_density; }
+  sf::Color color() const { return m_color; }
+  bool isEarthLike() const { return m_bEarthLike; }
 
   Vec3& pos() { return m_pos; }
   const Vec3& pos() const { return m_pos; }
@@ -49,6 +50,7 @@ public:
   
   void acc(Vec3 v) { m_acc = v; }
 
+  void generateStar();
 
 private:
   std::mt19937*               m_pGen = nullptr;
@@ -75,7 +77,7 @@ private:
   Vec3        m_acc;
 
 
-  void generateStar();
+
 };
 
 std::ostream& operator<<(std::ostream&, star&);

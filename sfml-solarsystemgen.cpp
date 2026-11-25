@@ -9,6 +9,8 @@
 #include <vector>
 #include <chrono>
 #include <format>
+#include <fstream>
+#include <bit>
 
 #include "logger.h"
 #include "constants.h"
@@ -16,6 +18,7 @@
 #include "star.h"
 #include "protoDisk.h"
 #include "solarSystemSim.h"
+#include "ephemeris.h"
 
 #ifdef __WIN32
     #include "XGetopt.h"
@@ -23,11 +26,21 @@
     #include <unistd.h>
 #endif
 
+struct PlanetTelemetry {
+    double_t a = 0.0;              // semi-major axis, AU
+    double_t e = 0.0;              // orbital eccentricity
+    double_t i = 0.0;              // orbital inclination, degrees
+    double_t t = 0.0;              // planetary temperature, kelvin degrees
+};
+
 const char* fontPath = { R"(C:\Users\geohu\AppData\Local\Microsoft\Windows\Fonts\intelone-mono-font-family-regular.ttf)" };
 
 void showVersion(const char*);
 void showHelp(const char*);
 bool isInteger(const char*);
+PlanetTelemetry computeTelemetry(const Body& b, const star& primary);
+PlanetEphemeris computePlanetEphemeris(const Body& b, const star& primary);
+bool writeBinaryEphemeris(const std::string& filename, const std::string& timeDate, bool earthLike, uint32_t seed, const star& primary, const solarSystemSim& sim);
 
 int main(int argc, char** argv) 
 {
@@ -77,10 +90,10 @@ int main(int argc, char** argv)
  
   std::random_device rd;
   std::mt19937       gen;
-  if (seed != 0xFFFFFFFF)    // use provided seed
-    gen.seed(seed);
-  else
-    gen.seed(rd());         // use the random device to get a seed. 
+  if (seed == 0xFFFFFFFF)    // use random seed
+    seed = rd();
+  
+  gen.seed(seed);            // seed the random-number generator
   
 
   star Primary(&gen, earthLike);                                    // generate the primary star
@@ -101,6 +114,7 @@ int main(int argc, char** argv)
   double zoomPixelsPerAU = 22.0;
   double dtPerSubstep = 0.02;        // Years per physics step
   int substepsPerFrame = 80;         // Speed multiplier
+  int32_t selectedBodyId = -1;
   bool paused = false;
   bool showTrails = false;
   
@@ -112,7 +126,17 @@ int main(int argc, char** argv)
       else if (const auto* key = event->getIf<sf::Event::KeyPressed>())             // key-press events 
       {
         if (key->code == sf::Keyboard::Key::Escape) { window.close(); }                // close application
-        if (key->code == sf::Keyboard::Key::R) {/* sim.reset();*/ }                    // reset simulation
+        if (key->code == sf::Keyboard::Key::R)                                      // reset simulation
+        {
+            seed = rd();
+            gen.seed(seed);
+
+            Primary.generateStar();
+            disk.genDisk();
+            ssSim.resetSim();
+
+            selectedBodyId = -1;
+        }                    
         if (key->code == sf::Keyboard::Key::P) { paused = !paused; }                   // pause simulation
         if (key->code == sf::Keyboard::Key::T) { showTrails = !showTrails; }           // show orbital trails
         else if (key->code == sf::Keyboard::Key::Up)                                   // speed up simulation
@@ -132,6 +156,41 @@ int main(int argc, char** argv)
         else 
           zoomPixelsPerAU /= 1.15;
         zoomPixelsPerAU = std::clamp(zoomPixelsPerAU, 0.002, 1500.0);
+      }
+      else if (const auto* resized = event->getIf<sf::Event::Resized>())            // window resize events
+      {
+          sf::FloatRect visibleArea({0.f,0.f}, {static_cast<float_t>(resized->size.x), static_cast<float_t>(resized->size.y) });
+          window.setView(sf::View(visibleArea));
+      }
+      else if (const auto* mouse = event->getIf<sf::Event::MouseButtonPressed>())   // mouse click events
+      {
+        if (mouse->button == sf::Mouse::Button::Left)                                   // lett mouse-button clicks
+        {
+            sf::Vector2f clickPos(static_cast<float>(mouse->position.x), static_cast<float>(mouse->position.y));
+            sf::Vector2f barycenter(window.getSize().x * 0.5f, window.getSize().y * 0.5f);
+
+            int32_t closestId = -1;
+            float bestDistPx = 18.0f; // Click snap radius in pixels
+
+            for (const auto& b : ssSim.getBodies())
+            {
+                if (!b.m_active) continue;
+                sf::Vector2f pScreen(
+                    barycenter.x + static_cast<float>(b.m_pos.x * zoomPixelsPerAU),
+                    barycenter.y + static_cast<float>(b.m_pos.y * zoomPixelsPerAU)
+                );
+                float dx = clickPos.x - pScreen.x;
+                float dy = clickPos.y - pScreen.y;
+                float dist = std::hypot(dx, dy);
+
+                if (dist < bestDistPx)
+                {
+                    bestDistPx = dist;
+                    closestId = b.m_id;
+                }
+            }
+            selectedBodyId = closestId; // Clicking empty space clears selection (-1)
+        }
       }
     }
 
@@ -316,6 +375,16 @@ int main(int argc, char** argv)
         planet.setOutlineThickness(1.5f);
         planet.setOutlineColor(sf::Color(80, 255, 130));
       }
+      if (b.m_id == selectedBodyId)                         // draw highlight around selected planet
+      {
+        sf::CircleShape selRing(visualR + 4.0f);
+        selRing.setOrigin({visualR + 4.0f, visualR + 4.0f});
+        selRing.setPosition(planet.getPosition());
+        selRing.setFillColor(sf::Color::Transparent);
+        selRing.setOutlineThickness(1.5f);
+        selRing.setOutlineColor(sf::Color::Yellow);
+        window.draw(selRing);
+      }
 
       
 
@@ -354,12 +423,48 @@ int main(int argc, char** argv)
 //      ss << "[R] New Star   [Scroll] Zoom (Zoom in close to see Star orbit the Barycenter +)   [Up/Down] Speed";
       if (paused)
         ss << "[PAUSED]\n";
+
+      if (selectedBodyId != -1)
+      {
+          const auto& bodies = ssSim.getBodies();
+          auto it = std::find_if(bodies.begin(), bodies.end(),
+              [selectedBodyId](const Body& b) { return b.m_id == selectedBodyId && b.m_active; });
+
+          if (it != bodies.end())
+          {
+              PlanetTelemetry tel = computeTelemetry(*it, Primary);
+              double mEarth = it->m_mass / M_EARTH;
+              double mJup = it->m_mass / M_JUPITER;
+
+              ss << "\n--- Selected Body #" << it->m_id << (it->m_isGiant ? " [Gas Giant]" : " [Rocky/Ice]") << " ---\n";
+              ss << std::fixed << std::setprecision(3);
+              ss << "Mass: " << mEarth << " M_earth (" << mJup << " M_jup)\n";
+              ss << "Orbit: a = " << tel.a << " AU  |  e = " << tel.e << "  |  i = " << tel.i << " deg\n";
+              ss << std::setprecision(1);
+              ss << "Eq. Temp: " << tel.t << " K" << (it->m_inHabitableZone ? "  [IN HZ]" : "") << "\n";
+          }
+          else
+          {
+              selectedBodyId = -1; // Body merged or disrupted
+          }
+      }
+
       sf::Text hud(font, ss.str(), 14);
       hud.setPosition({ 16.f, 16.f });
       hud.setFillColor(sf::Color(220, 230, 245));
       window.draw(hud);
     }
     window.display();
+  }
+
+  std::string outFileName = "ephemeris_" + timeDate + ".bin";
+  if (writeBinaryEphemeris(outFileName, timeDate, earthLike, seed, Primary, ssSim))
+  {
+      std::cout << "Wrote binary ephemeris (" << ssSim.getBodies().size() << " bodies) to " << outFileName << std::endl;
+  }
+  else
+  {
+      std::cout << "Failed to write ephemeris to " << outFileName << std::endl;
   }
 
   return 0;
@@ -392,3 +497,139 @@ bool isInteger(const char* bp)
   const char* ep = bp + strlen(bp);
   return ep == std::find_if(bp, ep, [](char ch) {return !std::isdigit(ch); });
 }
+
+PlanetTelemetry computeTelemetry(const Body& b, const star& primary)
+{
+    PlanetTelemetry tel;
+
+    Vec3  rVec = b.m_pos - primary.pos();
+    Vec3  vVec = b.m_vel - primary.vel();
+
+    double_t r = rVec.mag();
+    double_t vSq = vVec.magSq();
+    double_t mu = G*(primary.mass() + b.m_mass);
+
+    // Specific orbital energy ->semi-major axis: 1/a = 2/r - v^2/mu
+    double_t invA = (2.0/r) - (vSq/mu);
+    tel.a = (std::abs(invA) > 1E12) ? (1.0/invA): r;
+
+    // Eccentricity vector: e_vec = ((v^2 - mu/r)*r_vec - (r_vec . v_vec)*v_vec) / mu
+    Vec3 eVec = rVec*(vSq - mu/r) - vVec*rVec.dot(vVec)*(1.0/mu);
+    tel.e = eVec.mag();
+
+    // Specific angular momentum -> inclination cos(i) = h_z/|h|
+    Vec3 hVec = rVec.cross(vVec);
+    double_t hMag = hVec.mag();
+
+    if (hMag > 1E-12)
+    {
+        double_t cosI = std::clamp(hVec.z / hMag, -1.0, 1.0);
+        tel.i = std::acos(cosI)*(180.0/PI);
+    }
+
+    // equilibrium temperature, assuming Bond albedo A ~0.3, no greenhouse effect.
+    // for earth T_eq ~ 255 K at 1 AU and 1 L_sum
+    double_t distAU = std::max(r, 1E-4);
+    double_t empK = 255.0 * std::pow(primary.luminosity(), 0.25) / std::sqrt(distAU);
+    tel.t = empK;
+
+    return tel;
+}
+
+
+PlanetEphemeris computePlanetEphemeris(const Body& b, const star& primary)
+{
+    PlanetEphemeris ep{};
+
+    ep.id = b.m_id;
+    ep.isGiant = b.m_isGiant ? 1 : 0;
+    ep.inHabitableZone = b.m_inHabitableZone ? 1 : 0;
+    ep.massEarth = b.m_mass / M_EARTH;
+    
+    Vec3 rVec = b.m_pos - primary.pos();
+    Vec3 vVec = b.m_vel - primary.vel();
+    double r = rVec.mag();
+    double vSq = vVec.magSq();
+    double mu = G * (primary.mass() + b.m_mass);
+    
+    // 1. Semi-major axis (a) & Period (T)
+    double invA = (2.0 / r) - (vSq / mu);
+    ep.semiMajorAxisAU = (std::abs(invA) > 1e-12) ? (1.0 / invA) : r;
+    ep.periodYr = (ep.semiMajorAxisAU > 0.0)
+        ? (2.0 * PI * std::sqrt(std::pow(ep.semiMajorAxisAU, 3.0) / mu))
+        : 0.0; // Hyperbolic/unbound escape trajectory
+    
+    // 2. Angular momentum vector (h = r x v) & Inclination (i)
+    Vec3 hVec = rVec.cross(vVec);
+    double hMag = hVec.mag();
+    if (hMag > 1e-12)
+    {
+        ep.inclinationDeg = std::acos(std::clamp(hVec.z / hMag, -1.0, 1.0)) * (180.0 / PI);
+    }
+    
+    // 3. Node vector (n = k_hat x h = (-h_y, h_x, 0)) & RAAN (Omega)
+    Vec3 nVec = { -hVec.y, hVec.x, 0.0 };
+    double nMag = nVec.mag();
+    if (nMag > 1e-12)
+    {
+        double raanRad = std::acos(std::clamp(nVec.x / nMag, -1.0, 1.0));
+        if (nVec.y < 0.0) raanRad = 2.0 * PI - raanRad;
+        ep.raanDeg = raanRad * (180.0 / PI);
+    }
+    
+    // 4. Eccentricity vector (e_vec) & Argument of Periapsis (omega)
+    Vec3 eVec = (rVec * (vSq - mu / r) - vVec * rVec.dot(vVec)) * (1.0 / mu);
+    ep.eccentricity = eVec.mag();
+    
+    if (nMag > 1e-12 && ep.eccentricity > 1e-12)
+    {
+        double omegaRad = std::acos(std::clamp(nVec.dot(eVec) / (nMag * ep.eccentricity), -1.0, 1.0));
+        if (eVec.z < 0.0) omegaRad = 2.0 * PI - omegaRad;
+        ep.argPeriapsisDeg = omegaRad * (180.0 / PI);
+    }
+    else if (ep.eccentricity > 1e-12)
+    {
+        // Equatorial fallback (i ~ 0): measure longitude of periapsis from +X axis
+        double omegaRad = std::atan2(eVec.y, eVec.x);
+        if (omegaRad < 0.0) omegaRad += 2.0 * PI;
+        ep.argPeriapsisDeg = omegaRad * (180.0 / PI);
+    }
+    
+    return ep;
+}
+
+ bool writeBinaryEphemeris(const std::string & filename,
+     const std::string & timeDate,
+     bool earthLike,
+     uint32_t seed,
+     const star & primary,
+     const solarSystemSim & sim)
+ {
+     std::vector<PlanetEphemeris> records;
+     for (const auto& b : sim.getBodies())
+     {
+         if (!b.m_active) continue;
+         records.push_back(computePlanetEphemeris(b, primary));
+     }
+
+     EphemerisHeader header{};
+     header.endianness = (std::endian::native == std::endian::little) ? 1 : 2;
+     std::snprintf(header.runDateTime, sizeof(header.runDateTime), "%s", timeDate.c_str());
+     header.earthLike = earthLike ? 1 : 0;
+     header.seed = seed;
+     header.simTimeYr = sim.getSimTime();
+     header.starMass = primary.mass();
+     header.bodyCount = static_cast<uint32_t>(records.size());
+
+     std::ofstream out(filename, std::ios::binary);
+     if (!out) return false;
+
+     out.write(reinterpret_cast<const char*>(&header), sizeof(EphemerisHeader));
+     if (!records.empty())
+     {
+         out.write(reinterpret_cast<const char*>(records.data()),
+             records.size() * sizeof(PlanetEphemeris));
+     }
+     return out.good();
+ }
+

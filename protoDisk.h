@@ -42,6 +42,8 @@ public:
   DiskRing& ring(int32_t ndx) { return m_rings.at(ndx); }
   //const DiskRing& ring(int32_t ndx) { return m_rings.at(ndx); }
 
+  void genDisk();
+
 private:
   star*           m_pPrimary;
   std::mt19937*   m_pGen;
@@ -55,7 +57,7 @@ private:
   int32_t         m_cntRings;
   std::vector<DiskRing> m_rings;     // array of rings in the proto-planetary disk
                   
-  void genDisk();
+
 };
 
 #endif
