@@ -117,6 +117,7 @@ int main(int argc, char** argv)
   int32_t selectedBodyId = -1;
   bool paused = false;
   bool showTrails = false;
+  bool sideView = false;
   
   while (window.isOpen()) 
   {
@@ -139,9 +140,10 @@ int main(int argc, char** argv)
         }                    
         if (key->code == sf::Keyboard::Key::P) { paused = !paused; }                   // pause simulation
         if (key->code == sf::Keyboard::Key::T) { showTrails = !showTrails; }           // show orbital trails
+        if (key->code == sf::Keyboard::Key::V) { sideView = !sideView; }
         else if (key->code == sf::Keyboard::Key::Up)                                   // speed up simulation
         {
-          substepsPerFrame = std::min(400, substepsPerFrame + 20);
+          substepsPerFrame = std::min(/*400*/800, substepsPerFrame + 20);
         }
         else if (key->code == sf::Keyboard::Key::Down)                                 // slow down simulation
         {
@@ -175,9 +177,10 @@ int main(int argc, char** argv)
             for (const auto& b : ssSim.getBodies())
             {
                 if (!b.m_active) continue;
+                double_t worldY = sideView ? b.m_pos.z : b.m_pos.y;
                 sf::Vector2f pScreen(
                     barycenter.x + static_cast<float>(b.m_pos.x * zoomPixelsPerAU),
-                    barycenter.y + static_cast<float>(b.m_pos.y * zoomPixelsPerAU)
+                    barycenter.y + static_cast<float>(worldY * zoomPixelsPerAU)
                 );
                 float dx = clickPos.x - pScreen.x;
                 float dy = clickPos.y - pScreen.y;
@@ -207,10 +210,8 @@ int main(int argc, char** argv)
 
     window.clear(sf::Color(8, 10, 18));
     sf::Vector2f barycenterScreen(window.getSize().x * 0.5f, window.getSize().y * 0.5f);
-    //auto& star = ssSim.getStar();
-    //auto& disk = ssSim.getDisk();
     sf::Vector2f starScreen(barycenterScreen.x + static_cast<float_t>(Primary.pos().x * zoomPixelsPerAU),
-                            barycenterScreen.y + static_cast<float_t>(Primary.pos().y * zoomPixelsPerAU));
+                            barycenterScreen.y + static_cast<float_t>((sideView ? Primary.pos().z :Primary.pos().y) * zoomPixelsPerAU));
     // 0. Draw horizontal axis and tick marks
     std::vector<sf::VertexArray> grid;
     
@@ -232,84 +233,157 @@ int main(int argc, char** argv)
 
     for (sf::VertexArray va : grid)
        window.draw(line);
-   
-    // 1. Render Gas + Dust Annuli centered on the Star
-    for (int32_t ndx = disk.ringCnt() - 1; ndx >= 0; --ndx)
+    if (!sideView)                                                       // top-down rendering 
     {
-      const auto& ring = disk.ring(ndx);
-          float rOutPx = static_cast<float_t>(ring.rOuter * zoomPixelsPerAU);
-          float rInPx = static_cast<float_t>(ring.rInner * zoomPixelsPerAU);
-          if (rOutPx < 1.0f) continue;
-          double sigmaGas = ring.gasMass / ring.areaAU2;
-          double sigmaDust = ring.dustMass / ring.areaAU2;
-          std::uint8_t blueAlpha = static_cast<uint8_t>(std::uint8_t(std::min(45.0, sigmaGas * 1.2e5)));
-          std::uint8_t dustAlpha = static_cast<uint8_t>(std::uint8_t(std::min(70.0, sigmaDust * 4.5e6)));
-          if (blueAlpha > 0 || dustAlpha > 0) {
-            sf::CircleShape annulus(rOutPx);
-            annulus.setOrigin({ rOutPx, rOutPx });
-            annulus.setPosition(starScreen);
-            annulus.setFillColor(sf::Color::Transparent);
-            annulus.setOutlineThickness(-(rOutPx - rInPx));
-            annulus.setOutlineColor(sf::Color(
-              std::min(255, 50 + dustAlpha * 2),
-              std::min(255, 95 + dustAlpha),
-              std::min(255, 160 + blueAlpha),
-              std::max(blueAlpha, dustAlpha)
-            ));
-            window.draw(annulus);
-          }
-    }
+      // 1. Render Gas + Dust Annuli centered on the Star
+      for (int32_t ndx = disk.ringCnt() - 1; ndx >= 0; --ndx)
+      {
+        const auto& ring = disk.ring(ndx);
+        float rOutPx = static_cast<float_t>(ring.rOuter * zoomPixelsPerAU);
+        float rInPx = static_cast<float_t>(ring.rInner * zoomPixelsPerAU);
+        if (rOutPx < 1.0f) continue;
+        double sigmaGas = ring.gasMass / ring.areaAU2;
+        double sigmaDust = ring.dustMass / ring.areaAU2;
+        std::uint8_t blueAlpha = static_cast<uint8_t>(std::uint8_t(std::min(45.0, sigmaGas * 1.2e5)));
+        std::uint8_t dustAlpha = static_cast<uint8_t>(std::uint8_t(std::min(70.0, sigmaDust * 4.5e6)));
+        if (blueAlpha > 0 || dustAlpha > 0) {
+          sf::CircleShape annulus(rOutPx);
+          annulus.setOrigin({ rOutPx, rOutPx });
+          annulus.setPosition(starScreen);
+          annulus.setFillColor(sf::Color::Transparent);
+          annulus.setOutlineThickness(-(rOutPx - rInPx));
+          annulus.setOutlineColor(sf::Color(
+            std::min(255, 50 + dustAlpha * 2),
+            std::min(255, 95 + dustAlpha),
+            std::min(255, 160 + blueAlpha),
+            std::max(blueAlpha, dustAlpha)
+          ));
+          window.draw(annulus);
+        }
+      }
 
-    // 2. Render Goldilocks (Habitable) Zone Band
-    float hzOutPx = static_cast<float_t>(Primary.HZ().second * zoomPixelsPerAU);
-    float hzInPx = static_cast<float_t>(Primary.HZ().first * zoomPixelsPerAU);
-    if (hzOutPx > 2.0f) 
+      // 2. Render Goldilocks (Habitable) Zone Band
+      float hzOutPx = static_cast<float_t>(Primary.HZ().second * zoomPixelsPerAU);
+      float hzInPx = static_cast<float_t>(Primary.HZ().first * zoomPixelsPerAU);
+      if (hzOutPx > 2.0f)
+      {
+        sf::CircleShape hzBand(hzOutPx);
+        hzBand.setOrigin({ hzOutPx, hzOutPx });
+        hzBand.setPosition(starScreen);
+        hzBand.setFillColor(sf::Color::Transparent);
+        hzBand.setOutlineThickness(-(hzOutPx - hzInPx));
+        hzBand.setOutlineColor(sf::Color(60, 210, 110, 45));
+        window.draw(hzBand);
+      }
+
+      // 3. Render Snow Line Boundary
+      sf::CircleShape snowRing(static_cast<float_t>(Primary.frostline() * zoomPixelsPerAU));
+      snowRing.setOrigin({ snowRing.getRadius(), snowRing.getRadius() });
+      snowRing.setPosition(starScreen);
+      snowRing.setFillColor(sf::Color::Transparent);
+      snowRing.setOutlineThickness(1.0f);
+      snowRing.setOutlineColor(sf::Color(100, 200, 255, 80));
+      window.draw(snowRing);
+
+      // 4. Render Inner Roche Limit
+      float rocheGasPx = static_cast<float_t>(Primary.ISL().first * zoomPixelsPerAU);
+      if (rocheGasPx > 1.5f)
+      {
+        sf::CircleShape rocheRing(rocheGasPx);
+        rocheRing.setOrigin({ rocheGasPx, rocheGasPx });
+        rocheRing.setPosition(starScreen);
+        rocheRing.setFillColor(sf::Color::Transparent);
+        rocheRing.setOutlineThickness(1.2f);
+        rocheRing.setOutlineColor(sf::Color(255, 75, 75, 160));
+        window.draw(rocheRing);
+      }
+
+      // 5. Render Outer Curvature / Hill Limit
+      double outerLimitAU = std::min(Primary.OSL().first, Primary.OSL().second);
+      float outerPx = static_cast<float_t>(outerLimitAU * zoomPixelsPerAU);
+      if (outerPx > 10.0f && outerPx < 5000.0f)
+      {
+        sf::CircleShape outerRing(outerPx);
+        outerRing.setOrigin({ outerPx, outerPx });
+        outerRing.setPosition(starScreen);
+        outerRing.setFillColor(sf::Color::Transparent);
+        outerRing.setOutlineThickness(1.5f);
+        outerRing.setOutlineColor(sf::Color(180, 100, 255, 110));
+        window.draw(outerRing);
+      }
+    }
+    else                                                                 // edge-on side view rendering 
     {
-      sf::CircleShape hzBand(hzOutPx);
-      hzBand.setOrigin({ hzOutPx, hzOutPx });
-      hzBand.setPosition(starScreen);
-      hzBand.setFillColor(sf::Color::Transparent);
-      hzBand.setOutlineThickness(-(hzOutPx - hzInPx));
-      hzBand.setOutlineColor(sf::Color(60, 210, 110, 45));
-      window.draw(hzBand);
+      // Helper lambda to draw symmetric left/right horizontal bands in the X-Z plane
+      auto drawSideBand = [&](float rInPx, float rOutPx, float halfHeightPx, sf::Color col) {
+        float width = rOutPx - rInPx;
+        if (width <= 0.5f) return;
+      
+        sf::RectangleShape rightBand({ width, halfHeightPx * 2.0f });
+        rightBand.setPosition({ starScreen.x + rInPx, starScreen.y - halfHeightPx });
+        rightBand.setFillColor(col);
+        window.draw(rightBand);
+      
+        sf::RectangleShape leftBand({ width, halfHeightPx * 2.0f });
+        leftBand.setPosition({ starScreen.x - rOutPx, starScreen.y - halfHeightPx });
+        leftBand.setFillColor(col);
+        window.draw(leftBand);
+        };
+      
+      // Helper lambda to draw symmetric left/right vertical boundary markers
+      auto drawSideMarker = [&](float rPx, float halfHeightPx, float thickness, sf::Color col) {
+        if (rPx < 1.5f || rPx > 5000.0f) return;
+        for (float sign : { -1.0f, 1.0f }) {
+          sf::RectangleShape marker({ thickness, halfHeightPx * 2.0f });
+          marker.setOrigin({ thickness * 0.5f, halfHeightPx });
+          marker.setPosition({ starScreen.x + sign * rPx, starScreen.y });
+          marker.setFillColor(col);
+          window.draw(marker);
+        }
+        };
+      
+      // 1. Gas + Dust Disk Cross-Section (flared scale height h/r ~ 0.05)
+      for (int32_t ndx = disk.ringCnt() - 1; ndx >= 0; --ndx)
+      {
+        const auto& ring = disk.ring(ndx);
+        float rOutPx = static_cast<float>(ring.rOuter * zoomPixelsPerAU);
+        float rInPx = static_cast<float>(ring.rInner * zoomPixelsPerAU);
+        if (rOutPx < 1.0f) continue;
+      
+        double sigmaGas = ring.gasMass / ring.areaAU2;
+        double sigmaDust = ring.dustMass / ring.areaAU2;
+        std::uint8_t blueAlpha = static_cast<std::uint8_t>(std::min(45.0, sigmaGas * 1.2e5));
+        std::uint8_t dustAlpha = static_cast<std::uint8_t>(std::min(70.0, sigmaDust * 4.5e6));
+      
+        if (blueAlpha > 0 || dustAlpha > 0) {
+          float halfThick = std::max(2.0f, rOutPx * 0.05f);
+          sf::Color col(
+            std::min(255, 50 + dustAlpha * 2),
+            std::min(255, 95 + dustAlpha),
+            std::min(255, 160 + blueAlpha),
+            std::max(blueAlpha, dustAlpha)
+          );
+          drawSideBand(rInPx, rOutPx, halfThick, col);
+        }
+      }
+      
+      // 2. Goldilocks (Habitable) Zone Band
+      float hzOutPx = static_cast<float>(Primary.HZ().second * zoomPixelsPerAU);
+      float hzInPx = static_cast<float>(Primary.HZ().first * zoomPixelsPerAU);
+      if (hzOutPx > 2.0f) {
+        drawSideBand(hzInPx, hzOutPx, 24.0f, sf::Color(60, 210, 110, 45));
+      }
+      
+      // 3. Snow Line Boundary
+      drawSideMarker(static_cast<float>(Primary.frostline() * zoomPixelsPerAU), 28.0f, 1.5f, sf::Color(100, 200, 255, 110));
+      
+      // 4. Inner Roche Limit
+      drawSideMarker(static_cast<float>(Primary.ISL().first * zoomPixelsPerAU), 20.0f, 1.5f, sf::Color(255, 75, 75, 170));
+      
+      // 5. Outer Curvature / Hill Limit
+      double outerLimitAU = std::min(Primary.OSL().first, Primary.OSL().second);
+      drawSideMarker(static_cast<float>(outerLimitAU * zoomPixelsPerAU), 35.0f, 1.5f, sf::Color(180, 100, 255, 120));
     }
-
-    // 3. Render Snow Line Boundary
-    sf::CircleShape snowRing(static_cast<float_t>(Primary.frostline() * zoomPixelsPerAU));
-    snowRing.setOrigin({ snowRing.getRadius(), snowRing.getRadius() });
-    snowRing.setPosition(starScreen);
-    snowRing.setFillColor(sf::Color::Transparent);
-    snowRing.setOutlineThickness(1.0f);
-    snowRing.setOutlineColor(sf::Color(100, 200, 255, 80));
-    window.draw(snowRing);
-    
-    // 4. Render Inner Roche Limit
-    float rocheGasPx = static_cast<float_t>(Primary.ISL().first * zoomPixelsPerAU);
-    if (rocheGasPx > 1.5f) 
-    {
-      sf::CircleShape rocheRing(rocheGasPx);
-      rocheRing.setOrigin({ rocheGasPx, rocheGasPx });
-      rocheRing.setPosition(starScreen);
-      rocheRing.setFillColor(sf::Color::Transparent);
-      rocheRing.setOutlineThickness(1.2f);
-      rocheRing.setOutlineColor(sf::Color(255, 75, 75, 160));
-      window.draw(rocheRing);
-    }
-
-    // 5. Render Outer Curvature / Hill Limit
-    double outerLimitAU = std::min(Primary.OSL().first, Primary.OSL().second);
-    float outerPx = static_cast<float_t>(outerLimitAU * zoomPixelsPerAU);
-    if (outerPx > 10.0f && outerPx < 5000.0f) 
-    {
-      sf::CircleShape outerRing(outerPx);
-      outerRing.setOrigin({ outerPx, outerPx });
-      outerRing.setPosition(starScreen);
-      outerRing.setFillColor(sf::Color::Transparent);
-      outerRing.setOutlineThickness(1.5f);
-      outerRing.setOutlineColor(sf::Color(180, 100, 255, 110));
-      window.draw(outerRing);
-    }
-
     // 6. Render Central Star
     float starVisualRadius = std::max(5.0f, static_cast<float_t>(Primary.radius() * zoomPixelsPerAU * 18.0));
     sf::CircleShape starShape(starVisualRadius);
@@ -339,19 +413,23 @@ int main(int argc, char** argv)
         sf::VertexArray trailVA(sf::PrimitiveType::LineStrip, b.m_trail.size() + 1);
         for (size_t idx = 0; idx < b.m_trail.size(); ++idx)
         {
+          double trialY = sideView ? b.m_trail[idx].z : b.m_trail[idx].y;
           trailVA[idx].position = {
             barycenterScreen.x + static_cast<float_t>(b.m_trail[idx].x * zoomPixelsPerAU),
-            barycenterScreen.y + static_cast<float_t>(b.m_trail[idx].y * zoomPixelsPerAU)
+            barycenterScreen.y + static_cast<float_t>(trialY * zoomPixelsPerAU)
           };
+
           sf::Color c = b.m_color;
           c.a = static_cast<std::uint8_t>(140 * idx / b.m_trail.size());
           trailVA[idx].color = c;
         }
         // Connect final vertex smoothly to the planet's current position
+        double headY = sideView ? b.m_pos.z : b.m_pos.y;
         trailVA[b.m_trail.size()].position = {
-          barycenterScreen.x + static_cast<float_t>(b.m_pos.x * zoomPixelsPerAU),
-          barycenterScreen.y + static_cast<float_t>(b.m_pos.y * zoomPixelsPerAU)
+          barycenterScreen.x + static_cast<float>(b.m_pos.x * zoomPixelsPerAU),
+          barycenterScreen.y + static_cast<float>(headY * zoomPixelsPerAU)
         };
+
         sf::Color headCol = b.m_color;
         headCol.a = 160;
         trailVA[b.m_trail.size()].color = headCol;
@@ -363,13 +441,17 @@ int main(int argc, char** argv)
       if (b.m_inHabitableZone && !b.m_isGiant && massEarth > 0.2) habitablePlanets++;
       double_t rOrbit = std::max(0.05, (b.m_pos - Primary.pos()).mag());
       double_t sinInc = std::clamp(b.m_pos.z / rOrbit, -0.5, 0.5);
-      float visualR = std::clamp(2.0f + static_cast<float_t>(std::log10(massEarth + 1.0) * 3.5), 2.0f, 14.0f);
-      visualR *= static_cast<float_t>(1.0 + sinInc*0.4);
+      double headY = sideView ? b.m_pos.z : b.m_pos.y;
+      double depthCoord = sideView ? b.m_pos.y : b.m_pos.z;
+      double sinDepth = std::clamp(depthCoord / rOrbit, -0.5, 0.5);
+      float visualR = std::clamp(2.0f + static_cast<float>(std::log10(massEarth + 1.0) * 3.5), 2.0f, 14.0f);
+      visualR *= static_cast<float>(1.0 + sinDepth * 0.4);
       sf::CircleShape planet(visualR);
       planet.setOrigin({ visualR, visualR });
       planet.setPosition({
       barycenterScreen.x + static_cast<float_t>(b.m_pos.x * zoomPixelsPerAU),
-      barycenterScreen.y + static_cast<float_t>(b.m_pos.y * zoomPixelsPerAU)});
+      barycenterScreen.y + static_cast<float_t>(headY * zoomPixelsPerAU)});
+
       planet.setFillColor(b.m_color);
       if (b.m_inHabitableZone && !b.m_isGiant && massEarth > 0.2) {
         planet.setOutlineThickness(1.5f);
@@ -402,8 +484,10 @@ int main(int argc, char** argv)
       // Convert AU/yr to m/s (1 AU/yr = 4740.47 m/s)
       double starSpeedMS = Primary.vel().mag() * 4740.47;
       std::ostringstream ss;
-      ss << std::fixed << std::setprecision(2);
+      ss << std::fixed << std::setprecision(4);
       ss << "Simulation started at: " << timeDate<< " with Zoom factor : " << zoomPixelsPerAU << "\n";
+      ss << "Simulation speed: " << substepsPerFrame << " (simulation steps per frame)\n";
+      ss << "View: " << (sideView ? "SIDE (X-Z) Inclination" : "TOP-DOWN (X-Y Orbial plane)\n");
       ss << "Star: " << Primary.HRType() << "-type (" << Primary.mass() << " M_sun, " << static_cast<float_t>(Primary.temp()) << " K)\n";
       ss << (Primary.isEarthLike() ? "  [EARTH-LIKE PRIMARY: YES]" : "  [EARTH-LIKE PRIMARY: NO]") << "\n";
       ss << std::setprecision(5);
@@ -415,14 +499,11 @@ int main(int argc, char** argv)
 //      ss << std::setprecision(1);
       ss << "Gas Reservoir:  " << remGasEarth << " / " << initGasEarth << " M_earth (" << (disk.gasDissipation() * 100.0) << "%)\n";
       ss << "Dust Reservoir: " << remDustEarth << " / " << initDustEarth << " M_earth\n";
-      ss << std::setprecision(2);
+      ss << std::setprecision(4);
       ss << "Time: " << (ssSim.getSimTime() / 1e6) << " Myr  |  Phase: "
          << (ssSim.isOligarchic() ? "OLIGARCHIC GIANT IMPACTS" : "GAS/DUST ACCRETION & MIGRATION") << "\n";
       ss << "Active Bodies: " << ssSim.getBodies().size() << "  |  Tidally Shredded: " << ssSim.getTidallyDisruptedCount()
          << "  |  HZ Worlds: " << habitablePlanets << "\n";
-//      ss << "[R] New Star   [Scroll] Zoom (Zoom in close to see Star orbit the Barycenter +)   [Up/Down] Speed";
-      if (paused)
-        ss << "[PAUSED]\n";
 
       if (selectedBodyId != -1)
       {
@@ -447,7 +528,11 @@ int main(int argc, char** argv)
           {
               selectedBodyId = -1; // Body merged or disrupted
           }
+
       }
+      ss << "\n[R] New Star   [Scroll] Zoom    [Up/Down] Speed  [P] Pause  [T] trails  [V] Profile View";
+      if (paused)
+        ss << "[PAUSED]\n";
 
       sf::Text hud(font, ss.str(), 14);
       hud.setPosition({ 16.f, 16.f });
